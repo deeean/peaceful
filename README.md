@@ -17,5 +17,4 @@ $ peaceful convert ./testdata/lenna.png ./testdata/lenna.jpg
 | crop | Crop image | ❌ |
 | rotate | Rotate image | ❌ |
 | flip | Flip image | ❌ |
-| flop | Flop image | ❌ |
 | compress | Compress image | ❌ |
