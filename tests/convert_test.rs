@@ -1,6 +1,6 @@
 use peaceful::convert;
 
 #[test]
-fn convert_single() {
-    convert("./testdata/**/*.png", "./tempdir/", "ico");
+fn test_convert() {
+    convert("./testdata/**/*.png", "./tempdir/", "jpg");
 }

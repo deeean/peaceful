@@ -1,5 +1,5 @@
 use clap::{Args, Parser, Subcommand};
-use peaceful::{convert};
+use peaceful::{convert, resize};
 
 #[derive(Debug, Parser)]
 #[command(name = "peaceful", about = "A simple image processing tool")]
@@ -11,6 +11,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Convert(ConvertArgs),
+    Resize(ResizeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -23,6 +24,16 @@ pub struct ConvertArgs {
     format: String,
 }
 
+#[derive(Debug, Args)]
+pub struct ResizeArgs {
+    #[arg(short, long)]
+    input: String,
+    #[arg(short, long)]
+    output: String,
+    #[arg(short, long)]
+    size: String,
+}
+
 fn main() {
     let args = Cli::parse();
 
@@ -32,5 +43,10 @@ fn main() {
             args.output.as_str(),
             args.format.as_str()
         ),
+        Command::Resize(args) => resize(
+            args.input.as_str(),
+            args.output.as_str(),
+            args.size.as_str()
+        )
     }
 }
