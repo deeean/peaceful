@@ -1,20 +1,8 @@
-# peaceful
+# Peaceful
+Peaceful is an image processing CLI tool designed for efficiency and ease of use. It supports image conversion, compression, and resizing.
 
-Peaceful is a simple image processing tool.
-
-## Basic Usage
+## Usage
+To convert PNG images to JPG format, use the following command:
 
 ```bash
-$ peaceful convert ./images/lenna.png ./lenna.jpg
-```
-
-## Features
-
-| Command | Description | Completed |
-| --- | --- | --- |
-| convert | Convert image format | ✅ |
-| resize | Resize image | ❌ | 
-| crop | Crop image | ❌ |
-| rotate | Rotate image | ❌ |
-| flip | Flip image | ❌ |
-| compress | Compress image | ❌ |
+peaceful convert --input ./testdata/**/*.png --output ./output --format jpg
