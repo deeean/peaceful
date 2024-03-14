@@ -5,7 +5,7 @@ Peaceful is a simple image processing tool.
 ## Basic Usage
 
 ```bash
-$ peaceful convert ./testdata/lenna.png ./testdata/lenna.jpg
+$ peaceful convert ./images/lenna.png ./lenna.jpg
 ```
 
 ## Features
