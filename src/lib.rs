@@ -1,8 +1,63 @@
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 use glob::glob;
 use image::GenericImageView;
 use indicatif::{ParallelProgressIterator};
 use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
+
+#[derive(Debug)]
+enum Size {
+    Numeric(u32),
+    Percentage(f32),
+}
+
+pub fn resize(input: &str, output: &str, size_str: &str) {
+    let entries = match get_image_entries(input) {
+        Ok(entries) => entries,
+        Err(error) => panic!("{}", error),
+    };
+
+    let output = PathBuf::from(output);
+    let first_dir = extract_first_dir(input);
+
+    let parsed_size = parse_size_str(size_str).expect("❌  Invalid size string");
+
+    entries.par_iter().progress().for_each(|entry| {
+        let img = match image::open(&entry) {
+            Ok(img) => img,
+            Err(_) => panic!("❌  Failed to open image [{}]", entry.display()),
+        };
+
+        let (width, height) = img.dimensions();
+        let new_width = calc_new_dim(width, &parsed_size[0]);
+        let new_height = calc_new_dim(height, &parsed_size[1]);
+        let resized_img = img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
+
+        let output_path = construct_output_path(&entry, &output, first_dir);
+        create_output_dir(&output_path).expect("Error creating output directory");
+        save_image(resized_img, output_path).expect("Error saving image");
+    });
+}
+
+pub fn convert(input: &str, output: &str, format_str: &str) {
+    let entries = match get_image_entries(input) {
+        Ok(entries) => entries,
+        Err(error) => panic!("{}", error),
+    };
+
+    let output = PathBuf::from(output);
+    let first_dir = extract_first_dir(input);
+
+    entries.par_iter().progress().for_each(|entry| {
+        let img = match image::open(&entry) {
+            Ok(img) => img,
+            Err(_) => panic!("❌  Failed to open image [{}]", entry.display()),
+        };
+
+        let output_path = construct_output_path(&entry, &output, first_dir).with_extension(format_str);
+        create_output_dir(&output_path).expect("Error creating output directory");
+        save_image(img, output_path).expect("Error saving image");
+    });
+}
 
 fn extract_first_dir(path: &str) -> &str {
     let trimmed_path = path.trim_start_matches("./").trim_start_matches('/');
@@ -13,168 +68,52 @@ fn extract_first_dir(path: &str) -> &str {
     first_directory.unwrap_or_else(|| "")
 }
 
-#[derive(Debug)]
-enum Size {
-    Numeric(u32),
-    Percentage(f32),
+fn create_output_dir(output_path: &Path) -> Result<(), String> {
+    let output_dir = output_path.parent().ok_or(format!("❌  Failed to get parent directory of [{}]", output_path.display()))?;
+    std::fs::create_dir_all(output_dir).map_err(|_| format!("❌  Failed to create directory [{}]", output_dir.display()))?;
+    Ok(())
 }
 
-pub fn resize(input: &str, output: &str, size_str: &str) {
-    let entries = glob(input)
-        .expect("❌  Failed to read glob pattern")
-        .filter_map(|e| e.ok())
-        .collect::<Vec<PathBuf>>();
+fn save_image(img: image::DynamicImage, output_path: PathBuf) -> Result<(), String> {
+    img.save(output_path.clone()).map_err(|e| format!("❌  Failed to save image [{}]: {}", output_path.display(), e))?;
+    Ok(())
+}
 
-    if entries.len() == 0 {
-        panic!("❌  No images found");
+fn get_image_entries(pattern: &str) -> Result<Vec<PathBuf>, String> {
+    let entries = glob(pattern).map_err(|_| "❌  Failed to read glob pattern")?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    if entries.is_empty() {
+        Err("❌  No images found".into())
+    } else {
+        Ok(entries)
     }
+}
 
-    let output = PathBuf::from(output);
-    let first_dir = extract_first_dir(input);
-
-    let parts_of_size = size_str.split(":").collect::<Vec<&str>>();
-    if parts_of_size.len() < 2 {
-        panic!("❌  Invalid size string");
-    }
-
-    let parsed_size = parts_of_size.iter()
+fn parse_size_str(size_str: &str) -> Result<Vec<Size>, &'static str> {
+    size_str.split(':')
         .map(|part| {
             if part.ends_with('%') {
-                let percentage = part.trim_end_matches('%').parse::<f32>();
-                match percentage {
-                    Ok (p) => Size::Percentage(p / 100.0),
-                    Err (_) => panic!("❌  Invalid percentage")
-                }
+                part.trim_end_matches('%').parse::<f32>().ok()
+                    .map(|p| Size::Percentage(p / 100.0))
+                    .ok_or("Invalid percentage")
             } else {
-                let numeric = part.parse::<u32>();
-                match numeric {
-                    Ok (n) => Size::Numeric(n),
-                    Err (_) => panic!("❌  Invalid number")
-                }
+                part.parse::<u32>().ok()
+                    .map(Size::Numeric)
+                    .ok_or("Invalid number")
             }
         })
-        .collect::<Vec<Size>>();
+        .collect()
+}
 
-    let results = entries
-        .par_iter()
-        .progress()
-        .map(|entry| {
-            let mut img = match image::open(&entry) {
-                Ok (img) => img,
-                Err (_) => {
-                    return format!("❌  Failed to open image [{}]", entry.display());
-                }
-            };
-
-            let (width, height) = img.dimensions();
-
-            let new_width = match &parsed_size[0] {
-                Size::Numeric (n) => *n,
-                Size::Percentage (p) => (width as f32 * p) as u32
-            };
-
-            let new_height = match &parsed_size[1] {
-                Size::Numeric (n) => *n,
-                Size::Percentage (p) => (height as f32 * p) as u32
-            };
-
-            img = img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
-
-            let stripped = match entry.strip_prefix(first_dir) {
-                Ok (p) => p,
-                Err (_) => entry
-            };
-
-            let mut output_path = output.join(stripped);
-
-            let output_dir = match output_path.parent() {
-                Some (p) => p,
-                None => {
-                    return format!("❌  Failed to get parent directory of [{}]", output_path.display());
-                }
-            };
-
-            match std::fs::create_dir_all(output_dir) {
-                Ok (_) => (),
-                Err (_) => {
-                    return format!("❌  Failed to create directory [{}]", output_dir.display());
-                }
-            }
-
-            match img.save(output_path.clone()) {
-                Ok (_) => (),
-                Err (e) => {
-                    return format!("❌  Failed to save image [{}]: {}", output_path.display(), e);
-                }
-            }
-
-            format!("✅  Successfully resize [{}] to [{}]", entry.display(), output_path.display())
-        })
-        .collect::<Vec<String>>();
-
-    for result in results {
-        println!("{}", result);
+fn calc_new_dim(original_dim: u32, size: &Size) -> u32 {
+    match size {
+        Size::Numeric(n) => *n,
+        Size::Percentage(p) => (original_dim as f32 * p) as u32,
     }
 }
 
-pub fn convert(input: &str, output: &str, format_str: &str) {
-    let entries = glob(input)
-        .expect("❌  Failed to read glob pattern")
-        .filter_map(|e| e.ok())
-        .collect::<Vec<PathBuf>>();
-
-    if entries.len() == 0 {
-        panic!("❌  No images found");
-    }
-
-    let output = PathBuf::from(output);
-    let first_dir = extract_first_dir(input);
-
-    let results = entries
-        .par_iter()
-        .progress()
-        .map(|entry| {
-            let img = match image::open(&entry) {
-                Ok (img) => img,
-                Err (_) => {
-                    return format!("❌  Failed to open image [{}]", entry.display());
-                }
-            };
-
-            let stripped = match entry.strip_prefix(first_dir) {
-                Ok (p) => p,
-                Err (_) => entry
-            };
-
-            let mut output_path = output.join(stripped);
-            output_path.set_extension(format_str);
-
-            let output_dir = match output_path.parent() {
-                Some (p) => p,
-                None => {
-                    return format!("❌  Failed to get parent directory of [{}]", output_path.display());
-                }
-            };
-
-            match std::fs::create_dir_all(output_dir) {
-                Ok (_) => (),
-                Err (_) => {
-                    return format!("❌  Failed to create directory [{}]", output_dir.display());
-                }
-            }
-
-            match img.save(output_path.clone()) {
-                Ok (_) => (),
-                Err (e) => {
-                    return format!("❌  Failed to save image [{}]: {}", output_path.display(), e);
-                }
-            }
-
-            format!("✅  Successfully converted [{}] to [{}]", entry.display(), output_path.display())
-        })
-        .collect::<Vec<String>>();
-
-    for result in results {
-        println!("{}", result);
-    }
+fn construct_output_path(entry: &PathBuf, output: &PathBuf, first_dir: &str) -> PathBuf {
+    let stripped = entry.strip_prefix(first_dir).unwrap_or(entry);
+    output.join(stripped)
 }
