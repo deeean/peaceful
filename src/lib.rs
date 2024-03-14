@@ -1,100 +1,79 @@
-use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{PathBuf};
 use glob::glob;
-use image::{GenericImageView, ImageFormat};
-use lazy_static::lazy_static;
+use indicatif::{ParallelProgressIterator};
+use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 
-lazy_static! {
-    static ref FORMATS: HashMap<&'static str, ImageFormat> = {
-        let mut m = HashMap::new();
-        m.insert("jpg", ImageFormat::Jpeg);
-        m.insert("png", ImageFormat::Png);
-        m.insert("gif", ImageFormat::Gif);
-        m.insert("webp", ImageFormat::WebP);
-        m.insert("tif", ImageFormat::Tiff);
-        m.insert("tiff", ImageFormat::Tiff);
-        m.insert("bmp", ImageFormat::Bmp);
-        m.insert("ico", ImageFormat::Ico);
-        m
-    };
+fn extract_first_dir(path: &str) -> &str {
+    let trimmed_path = path.trim_start_matches("./").trim_start_matches('/');
+
+    let first_directory = trimmed_path.split('/')
+        .find(|&component| !component.is_empty());
+
+    first_directory.unwrap_or_else(|| "")
+}
+
+pub fn resize(input: &str, output: &str) {
+
 }
 
 pub fn convert(input: &str, output: &str, format_str: &str) {
-    let format = match FORMATS.get(format_str) {
-        Some (f) => *f,
-        None => panic!("Invalid format")
-    };
-
-    let entries = match glob(input) {
-        Ok (paths) => paths.map(|entry| {
-            match entry {
-                Ok (path) => path,
-                Err (e) => panic!("Failed to read path: {}", e)
-            }
-        }).collect::<Vec<PathBuf>>(),
-        Err (e) => panic!("Failed to read glob pattern: {}", e)
-    };
+    let entries = glob(input)
+        .expect("Failed to read glob pattern")
+        .filter_map(|e| e.ok())
+        .collect::<Vec<PathBuf>>();
 
     if entries.len() == 0 {
         panic!("No images found");
     }
 
     let output = PathBuf::from(output);
+    let first_dir = extract_first_dir(input);
 
-    for entry in entries {
-        let base_path = match entry.parent() {
-            Some (p) => p,
-            None => {
-                eprintln!("Failed to get parent directory");
-                continue;
+    let results = entries
+        .par_iter()
+        .progress()
+        .map(|entry| {
+            let img = match image::open(&entry) {
+                Ok (img) => img,
+                Err (_) => {
+                    return format!("❌  Failed to open image [{}]", entry.display());
+                }
+            };
+
+            let stripped = match entry.strip_prefix(first_dir) {
+                Ok (p) => p,
+                Err (_) => entry
+            };
+
+            let mut output_path = output.join(stripped);
+            output_path.set_extension(format_str);
+
+            let output_dir = match output_path.parent() {
+                Some (p) => p,
+                None => {
+                    return format!("❌  Failed to get parent directory of [{}]", output_path.display());
+                }
+            };
+
+            match std::fs::create_dir_all(output_dir) {
+                Ok (_) => (),
+                Err (_) => {
+                    return format!("❌  Failed to create directory [{}]", output_dir.display());
+                }
             }
-        };
 
-        let mut img = match image::open(&entry) {
-            Ok (img) => img,
-            Err (e) => {
-                eprintln!("Failed to open image: {}", e);
-                continue;
-            }
-        };
-
-        if format == ImageFormat::Ico {
-            if img.width() > 256 {
-                img = img.resize(256, img.height(), image::imageops::FilterType::Lanczos3);
+            match img.save(output_path.clone()) {
+                Ok (_) => (),
+                Err (e) => {
+                    return format!("❌  Failed to save image [{}]: {}", output_path.display(), e);
+                }
             }
 
-            if img.height() > 256 {
-                img = img.resize(img.width(), 256, image::imageops::FilterType::Lanczos3);
-            }
-        }
+            format!("✅  Successfully converted [{}] to [{}]", entry.display(), output_path.display())
+        })
+        .collect::<Vec<String>>();
 
-        let mut output_path = output.join(entry.strip_prefix(base_path).unwrap());
-        output_path.set_extension(format_str);
-
-        let output_dir = match output_path.parent() {
-            Some (p) => p,
-            None => {
-                eprintln!("Failed to get parent directory");
-                continue;
-            }
-        };
-
-        match std::fs::create_dir_all(output_dir) {
-            Ok (_) => (),
-            Err (e) => {
-                eprintln!("Failed to create directory: {}", e);
-                continue;
-            }
-        }
-
-        match img.save(output_path.clone()) {
-            Ok (_) => (),
-            Err (e) => {
-                eprintln!("Failed to save image: {}", e);
-                continue;
-            }
-        }
-
-        println!("{} -> {}", entry.display(), output_path.display());
+    for result in results {
+        println!("{}", result);
     }
 }
